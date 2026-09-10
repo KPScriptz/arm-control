@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  ⚠️⚠️ THE ONE KEY THIS FILE EXISTS FOR, AND WITHOUT IT NOTHING REACHES THE RAIL.
+
+	  The Glamatic is a Siemens S7-1200, and its built-in web server terminates TLS with an old
+	  protocol version, weak ciphers and no forward secrecy. App Transport Security rejects all of
+	  that by default, and it rejects it BEFORE the URLSession delegate is ever asked about the
+	  certificate — so `PLCTrustDelegate` accepting the self-signed cert is necessary and not
+	  sufficient. Every request to https://192.168.1.2 simply fails.
+
+	  `NSAllowsLocalNetworking` lifts the ATS requirements for local/link-local destinations ONLY:
+	  RFC1918 addresses, .local, and unqualified hostnames. Anything on the public internet is
+	  still held to the full policy, which is why this is the correct switch rather than
+	  `NSAllowsArbitraryLoads`.
+
+	  PivotBooth (AuraBooth) has carried this key the whole time. ArmControl did not, which is a
+	  difference that CANNOT show up in the simulator: the simulated rail never opens a socket.
+
+	  ⚠️ The project uses GENERATE_INFOPLIST_FILE, so every other key still comes from the
+	  INFOPLIST_KEY_* build settings and is merged into this file at build time. Do not move those
+	  in here, and do not delete this file to "tidy up" — ATS has no INFOPLIST_KEY_ equivalent
+	  because it is a dictionary.
+	-->
+	<!--
+	  ⚠️ Required for `LocalNetworkPermission` to work AT ALL.
+
+	  Its detection is a Bonjour browse, and iOS refuses to browse a service type the app has not
+	  declared here. Without this entry the browse fails for a reason that has nothing to do with
+	  permission, and the check reports a denial that is not real — sending an operator into
+	  Settings to fix a switch that was never off.
+
+	  Nothing publishes this service. The rail is a Siemens PLC on a fixed IP and speaks no
+	  Bonjour; the type exists purely so there is something legal to browse for.
+	-->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_armcontrol._tcp</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

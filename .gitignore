@@ -1,0 +1,20 @@
+# Xcode build products and caches — 450 MB and regenerated every build
+build/
+DerivedData/
+*.xcarchive
+*.ipa
+
+# Per-user Xcode state
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# Never commit signing material. The ASC .p8 and distribution .p12 live in ~/.appstoreconnect
+*.p8
+*.p12
+*.mobileprovision
+*.cer
