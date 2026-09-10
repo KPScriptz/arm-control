@@ -429,7 +429,7 @@ struct JointStudioView: View {
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Slider(value: $arm.jointSpeed, in: 5...60, step: 1)
+                Slider(value: $arm.jointSpeed, in: 5...FactoryPrograms.maxSpeed, step: 1)
             }
         }
         .padding()
@@ -718,16 +718,50 @@ struct JointStudioView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
 
-            ForEach(store.motions) { m in
+            // Factory programs first, by number; authored movements after. The factory ones are
+            // what the PLC triggers today, so they are the natural starting point for an edit.
+            ForEach(store.motions.sorted {
+                switch ($0.program, $1.program) {
+                case let (a?, b?): return a < b
+                case (_?, nil):    return true
+                case (nil, _?):    return false
+                default:           return $0.name < $1.name
+                }
+            }) { m in
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(m.name).font(.subheadline.weight(.semibold))
+                        HStack(spacing: 6) {
+                            Text(m.name).font(.subheadline.weight(.semibold))
+                            if m.program != nil {
+                                Text("FACTORY")
+                                    .font(.caption2.weight(.bold))
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(Pivot.blue.opacity(0.2),
+                                                in: Capsule())
+                                    .foregroundStyle(Pivot.blue)
+                            }
+                        }
                         Text(String(format: "%d poses · %.1fs%@",
                                     m.poses.count, m.duration(),
                                     m.usesRail ? " · drives the rail" : ""))
                             .font(.caption).foregroundStyle(.secondary)
+                        if !m.caveats.isEmpty {
+                            // Say what the import could NOT carry, rather than presenting the
+                            // joint-space part as the whole program.
+                            Text("Partial — the original also uses \(m.caveats.joined(separator: ", "))")
+                                .font(.caption).foregroundStyle(Pivot.caution)
+                        }
                     }
                     Spacer()
+                    if let n = m.program {
+                        Button {
+                            store.restoreFactory(n)
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Restore the factory version")
+                    }
                     Button {
                         // Remembers where it came from, so Save replaces this movement instead of
                         // appending a second one with the same name.

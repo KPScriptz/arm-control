@@ -29,6 +29,12 @@ struct ArmPose: Codable, Equatable, Identifiable {
     var dwell: Double = 0
     /// Carriage target in mm, or nil to leave the rail alone for this pose.
     var rail: Double?
+    /// Joint acceleration in °/s², or nil for the gentle default.
+    ///
+    /// 🔑 The factory programs run 200–1146 °/s²; the app's original hardcoded 5 rad/s² is
+    /// 286 °/s², so a faithfully-imported program played back soft. Carried per pose so an
+    /// imported move keeps its snap and an authored one keeps its gentleness.
+    var acc: Double?
 
     /// Joint list padded/trimmed to the arm's real joint count, so a pose saved against a
     /// different assumption can never index out of range.
@@ -55,6 +61,11 @@ struct ArmMotion: Codable, Equatable, Identifiable {
     var id = UUID()
     var name: String
     var poses: [ArmPose]
+    /// The factory program this was imported from, if any. Nil for authored movements.
+    var program: Int?
+    /// Parts of the factory program this import could not represent — cartesian moves and arcs.
+    /// Non-empty means "this is the joint-space part of the program, not all of it."
+    var caveats: [String] = []
 
     /// Longest joint sweep between consecutive poses, divided by speed, plus dwells.
     ///
@@ -83,6 +94,7 @@ final class ArmMotionStore: ObservableObject {
     static let shared = ArmMotionStore()
 
     private static let key = "armcontrol.armMotions.v1"
+    private static let factorySeededKey = "armcontrol.armMotions.factorySeeded.v1"
 
     @Published private(set) var motions: [ArmMotion] = []
 
@@ -120,6 +132,23 @@ final class ArmMotionStore: ObservableObject {
            let m = try? JSONDecoder().decode([ArmMotion].self, from: d) {
             motions = m
         }
+        // 🔑 The factory programs land in the library ONCE, as ordinary editable movements. Seeded
+        // once rather than merged on every launch so a program you have edited or deleted stays
+        // that way — the same rule the rail's Whalefall seed follows. `restoreFactory` brings any
+        // of them back untouched.
+        if !UserDefaults.standard.bool(forKey: Self.factorySeededKey) {
+            motions.append(contentsOf: FactoryPrograms.all)
+            UserDefaults.standard.set(true, forKey: Self.factorySeededKey)
+            persist()
+        }
+    }
+
+    /// Put a factory program back exactly as delivered, replacing any edited copy.
+    func restoreFactory(_ n: Int) {
+        guard let fresh = FactoryPrograms.program(n) else { return }
+        motions.removeAll { $0.program == n }
+        motions.append(fresh)
+        persist()
     }
 
     // MARK: Library
@@ -207,7 +236,7 @@ final class ArmMotionStore: ObservableObject {
     func preview(_ pose: ArmPose) async -> Bool {
         guard arm.motionEnabled else { return false }
         let target = pose.normalised
-        guard await arm.moveJoints(target, speed: pose.speed) else { return false }
+        guard await arm.moveJoints(target, speed: pose.speed, acc: pose.acc) else { return false }
         return await arm.waitArrival(target)
     }
 
@@ -279,7 +308,7 @@ final class ArmMotionStore: ObservableObject {
                 }
             }
 
-            guard await arm.moveJoints(target, speed: pose.speed) else {
+            guard await arm.moveJoints(target, speed: pose.speed, acc: pose.acc) else {
                 note = "The arm refused pose \(i + 1)."
                 GlamaticLink.plog("arm motion aborted: pose \(i + 1) refused")
                 return

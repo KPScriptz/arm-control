@@ -74,7 +74,7 @@ struct PoseEditorView: View {
                     LabeledContent("Speed") {
                         Text("\(Int(pose.speed))°/s").monospacedDigit().foregroundStyle(.secondary)
                     }
-                    Slider(value: $pose.speed, in: 5...60, step: 1)
+                    Slider(value: $pose.speed, in: 5...FactoryPrograms.maxSpeed, step: 1)
 
                     LabeledContent("Hold on arrival") {
                         Text(String(format: "%.2fs", pose.dwell)).monospacedDigit()

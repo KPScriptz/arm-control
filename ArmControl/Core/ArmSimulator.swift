@@ -29,8 +29,11 @@ final class ArmSimulator: ObservableObject {
     private(set) var enabled = false
     private(set) var stopped = false
 
-    /// The only verified joint limit on this mechanism. See the note above.
-    static let j2Floor: Double = -95
+    /// 🔑 **Corrected 2026-09-10 from the factory export.** This used to be a lone J2 floor of −95°
+    /// inherited from PivotBooth's margin — and the manufacturer's own program 1 drives J2 to −99.9°
+    /// and J3 to −183.7°, so that floor would have REFUSED the factory's move. The envelope is now
+    /// what the 28 factory programs actually reach, per joint. See `FactoryPrograms.envelope`.
+    static var envelope: [ClosedRange<Double>] { FactoryPrograms.envelope }
 
     var isMoving: Bool {
         zip(joints, target).contains { abs($0 - $1) > 0.2 }
@@ -61,8 +64,12 @@ final class ArmSimulator: ObservableObject {
         want = Array(want.prefix(XArmLink.jointCount))
 
         // Refuse rather than silently clamp. A simulator that quietly fixes up an illegal pose
-        // teaches a sequence that the real arm will reject.
-        if want.count > 1, want[1] < Self.j2Floor { return false }
+        // teaches a sequence that the real arm will reject. Small tolerance so a factory pose
+        // sitting exactly on the envelope edge is not refused by rounding.
+        for (i, v) in want.enumerated() where i < Self.envelope.count {
+            let r = Self.envelope[i]
+            if v < r.lowerBound - 0.5 || v > r.upperBound + 0.5 { return false }
+        }
 
         target = want
         speed = max(1, s)

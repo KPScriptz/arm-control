@@ -274,17 +274,20 @@ final class XArmLink: ObservableObject {
         IncidentLog.shared.record(.safety, "Arm STOP", bad: true)
     }
 
+    /// Gentle default acceleration for authored moves, °/s². The factory programs use 200–1146.
+    static let defaultAcc: Double = 286      // = the original hardcoded 5 rad/s²
+
     /// Move to absolute joint angles (degrees, J1…J5).
     @discardableResult
-    func moveJoints(_ degs: [Double], speed: Double? = nil) async -> Bool {
+    func moveJoints(_ degs: [Double], speed: Double? = nil, acc: Double? = nil) async -> Bool {
         guard motionEnabled, !eStopActive else { return false }
         if simulated { return sim.moveJoints(degs, speed: speed ?? jointSpeed) }
         var p = Data()
         // Seven slots regardless of the arm's joint count — the protocol expects a fixed frame.
         for i in 0..<7 { p.appendLE32(Float((i < degs.count ? degs[i] : 0) * .pi / 180)) }
-        p.appendLE32(Float((speed ?? jointSpeed) * .pi / 180))   // speed rad/s
-        p.appendLE32(Float(5.0))                                 // acceleration rad/s², gentle
-        p.appendLE32(Float(0))                                   // mvtime
+        p.appendLE32(Float((speed ?? jointSpeed) * .pi / 180))            // speed rad/s
+        p.appendLE32(Float((acc ?? Self.defaultAcc) * .pi / 180))         // acceleration rad/s²
+        p.appendLE32(Float(0))                                            // mvtime
         return await command(FC.moveJoint, p) != nil
     }
 
