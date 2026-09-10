@@ -49,6 +49,19 @@ struct ArmPose: Codable, Equatable, Identifiable {
         return min(PLC.positionRange.upperBound, max(PLC.positionRange.lowerBound, rail))
     }
 
+    /// Same pose, ignoring identity.
+    ///
+    /// 🐞 `==` includes the `id`, and a program loaded from disk has different pose UUIDs from a
+    /// freshly built factory copy — so every seeded program read as "EDITED" the moment the app
+    /// relaunched. What matters is where the joints are, how fast, and how long it holds.
+    func sameShape(as o: ArmPose) -> Bool {
+        zip(normalised, o.normalised).allSatisfy { abs($0 - $1) < 0.05 }
+            && abs(speed - o.speed) < 0.05
+            && abs(dwell - o.dwell) < 0.005
+            && (rail == nil) == (o.rail == nil)
+            && abs((rail ?? 0) - (o.rail ?? 0)) < 0.5
+    }
+
     /// "J1 −40° · J2 12° · J3 −90°…" — what the row in the list reads.
     var jointLabel: String {
         normalised.enumerated()
@@ -85,6 +98,18 @@ struct ArmMotion: Codable, Equatable, Identifiable {
     }
 
     var usesRail: Bool { poses.contains { $0.rail != nil } }
+
+    /// Same sequence of poses, ignoring identity. See `ArmPose.sameShape`.
+    func samePoses(as o: ArmMotion) -> Bool {
+        poses.count == o.poses.count
+            && zip(poses, o.poses).allSatisfy { $0.sameShape(as: $1) }
+    }
+
+    /// True when this is a factory program that has been changed from as-delivered.
+    var isEditedFactory: Bool {
+        guard let n = program, let f = FactoryPrograms.program(n) else { return false }
+        return !samePoses(as: f)
+    }
 }
 
 // MARK: - The store and the player

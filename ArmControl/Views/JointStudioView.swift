@@ -42,6 +42,9 @@ struct JointStudioView: View {
     @State private var openTrace: RigTrace?
     @State private var confirmNeutral = false
     @State private var confirmHandGuide = false
+    @State private var editingProgram: ArmMotion?
+    /// The teaching / recording / timeline machinery, hidden unless asked for.
+    @AppStorage("armcontrol.arm.showAdvanced") private var showAdvanced = false
 
     /// "20°/s · hold 0.30s · rail 300 mm" — everything about the pose that is not a joint angle.
     private func poseDetail(_ p: ArmPose) -> String {
@@ -58,12 +61,25 @@ struct JointStudioView: View {
                 handGuideBanner
                 foreignMotionBanner
                 linkCard
-                if arm.connected {
-                    jointsCard
-                    sequenceCard
-                }
-                recordCard
+                // 🔑 The programs come FIRST. Opening one and changing a beat is what this tab is
+                // for; live jogging, pose capture, recording and the timeline are the machinery
+                // behind it, and they sit behind one switch so the common case is not buried.
                 libraryCard
+                Toggle(isOn: $showAdvanced) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show the advanced tools").font(.subheadline)
+                        Text("Live jogging, building a move from scratch, recording, timeline.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 4)
+                if showAdvanced {
+                    if arm.connected {
+                        jointsCard
+                        sequenceCard
+                    }
+                    recordCard
+                }
             }
             .padding()
             .frame(maxWidth: 760)          // a form this narrow reads better than a 1366pt sprawl
@@ -82,6 +98,9 @@ struct JointStudioView: View {
         }
         .sheet(item: $openTrace) { t in
             TimelineEditorView(trace: t)
+        }
+        .sheet(item: $editingProgram) { m in
+            ProgramEditorView(motion: m)
         }
         // ⚠️ Confirmed, never automatic. From an over-limit joint the path to neutral can sweep most
         // of the arm's range through whatever is in front of it.
@@ -728,49 +747,56 @@ struct JointStudioView: View {
                 default:           return $0.name < $1.name
                 }
             }) { m in
+                let edited = m.isEditedFactory
                 HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(m.name).font(.subheadline.weight(.semibold))
-                            if m.program != nil {
-                                Text("FACTORY")
-                                    .font(.caption2.weight(.bold))
-                                    .padding(.horizontal, 5).padding(.vertical, 1)
-                                    .background(Pivot.blue.opacity(0.2),
-                                                in: Capsule())
-                                    .foregroundStyle(Pivot.blue)
-                            }
-                        }
-                        Text(String(format: "%d poses · %.1fs%@",
-                                    m.poses.count, m.duration(),
-                                    m.usesRail ? " · drives the rail" : ""))
-                            .font(.caption).foregroundStyle(.secondary)
-                        if !m.caveats.isEmpty {
-                            // Say what the import could NOT carry, rather than presenting the
-                            // joint-space part as the whole program.
-                            Text("Partial — the original also uses \(m.caveats.joined(separator: ", "))")
-                                .font(.caption).foregroundStyle(Pivot.caution)
-                        }
-                    }
-                    Spacer()
-                    if let n = m.program {
-                        Button {
-                            store.restoreFactory(n)
-                        } label: {
-                            Image(systemName: "arrow.counterclockwise")
-                        }
-                        .buttonStyle(.bordered)
-                        .help("Restore the factory version")
-                    }
+                    // 🔑 The whole row opens the simple editor. One tap, then you are looking at
+                    // pose 1 of the program with arrows on every joint.
                     Button {
-                        // Remembers where it came from, so Save replaces this movement instead of
-                        // appending a second one with the same name.
-                        store.loadForEditing(m)
+                        editingProgram = m
                     } label: {
-                        Image(systemName: "pencil")
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) {
+                                    Text(m.name).font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                    if edited {
+                                        Text("EDITED")
+                                            .font(.caption2.weight(.bold))
+                                            .padding(.horizontal, 5).padding(.vertical, 1)
+                                            .background(Pivot.caution.opacity(0.2), in: Capsule())
+                                            .foregroundStyle(Pivot.caution)
+                                    } else if m.program != nil {
+                                        Text("FACTORY")
+                                            .font(.caption2.weight(.bold))
+                                            .padding(.horizontal, 5).padding(.vertical, 1)
+                                            .background(Pivot.blue.opacity(0.2), in: Capsule())
+                                            .foregroundStyle(Pivot.blue)
+                                    }
+                                }
+                                Text(String(format: "%d poses · %.1fs%@",
+                                            m.poses.count, m.duration(),
+                                            m.usesRail ? " · drives the rail" : ""))
+                                    .font(.caption).foregroundStyle(.secondary)
+                                if !m.caveats.isEmpty {
+                                    Text("Partial — the original also uses \(m.caveats.joined(separator: ", "))")
+                                        .font(.caption).foregroundStyle(Pivot.caution)
+                                }
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption).foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(store.isPlaying)
+                    .buttonStyle(.plain)
+
+                    if edited, let n = m.program {
+                        // A word, not an icon — "what does the circular arrow do" was the question.
+                        Button("Reset") { store.restoreFactory(n) }
+                            .font(.subheadline)
+                            .buttonStyle(.bordered)
+                            .tint(Pivot.caution)
+                    }
 
                     Button {
                         store.start(m)
@@ -780,12 +806,14 @@ struct JointStudioView: View {
                     .buttonStyle(.bordered)
                     .disabled(!arm.motionEnabled || store.isPlaying)
 
-                    Button { pendingDelete = m } label: {
-                        Image(systemName: "trash").foregroundStyle(Pivot.danger)
+                    if m.program == nil {
+                        Button { pendingDelete = m } label: {
+                            Image(systemName: "trash").foregroundStyle(Pivot.danger)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
-                .padding(.vertical, 2)
+                .padding(.vertical, 4)
             }
 
             if !arm.motionEnabled, !store.motions.isEmpty {
