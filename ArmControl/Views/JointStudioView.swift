@@ -273,10 +273,17 @@ struct JointStudioView: View {
                 HStack(spacing: 12) {
                     // The one genuinely loud thing on the screen. An energised five-joint arm that
                     // looks identical to an idle one is the state you do not want to misread.
-                    Label(arm.simulated ? "SIMULATED" : "LIVE — the arm will move",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(arm.simulated ? Pivot.purple : Pivot.caution)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label(arm.simulated ? "SIMULATED" : "LIVE — the arm will move",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(arm.simulated ? Pivot.purple : Pivot.caution)
+                        // The controller's word, not ours. State 4 with a mint LIVE badge above
+                        // it is exactly "play does nothing".
+                        Text("Arm reports: \(arm.stateText)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(arm.armState == 4 || arm.armState == 3 ? Pivot.danger : .secondary)
+                    }
                     Spacer()
                     Button {
                         Task { await arm.disable() }

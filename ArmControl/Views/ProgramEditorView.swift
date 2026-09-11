@@ -328,19 +328,31 @@ struct ProgramEditorView: View {
                 .disabled(!arm.motionEnabled || store.isPlaying)
             }
 
-            if store.isPlaying {
-                HStack {
-                    Text(store.note).font(.footnote.monospacedDigit()).foregroundStyle(Pivot.caution)
+            // 🔑 The note stays after playback ends. "Play did nothing" was the report, and the
+            // reason WHY was in a string that vanished the instant playback returned.
+            if !store.note.isEmpty {
+                HStack(alignment: .top) {
+                    Text(store.note)
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(store.note.hasPrefix("Won't") || store.note.contains("NOT")
+                                         || store.note.contains("REFUSED") ? Pivot.danger : Pivot.caution)
                     Spacer()
-                    Button {
-                        store.stop()
-                    } label: {
-                        Label("STOP", systemImage: "stop.fill").font(.subheadline.weight(.bold))
+                    if store.isPlaying {
+                        Button {
+                            store.stop()
+                        } label: {
+                            Label("STOP", systemImage: "stop.fill").font(.subheadline.weight(.bold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Pivot.danger)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Pivot.danger)
                 }
             }
+
+            // What the CONTROLLER says, next to what the app believes.
+            Text("Arm reports: \(arm.stateText)\(arm.errorCode != 0 ? " · fault \(arm.errorCode)" : "")\(arm.simulated ? " · SIMULATED" : "")")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(arm.armState == 4 || arm.armState == 3 || arm.errorCode != 0 ? Pivot.danger : .secondary)
 
             if !arm.motionEnabled {
                 // The reason, not a grey button.

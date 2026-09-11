@@ -248,8 +248,15 @@ final class XArmLink: ObservableObject {
             return false
         }
         motionEnabled = true
-        status = "Arm live"
-        GlamaticLink.plog("xArm: ENABLED (operator)")
+        // 🔑 Do not report "live" on our own say-so. Read back what the controller thinks.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        if let why = await readiness() {
+            status = "Enabled, but: \(why)"
+            GlamaticLink.plog("xArm: enabled but not ready — \(why)")
+            return true
+        }
+        status = "Arm live — \(stateText)"
+        GlamaticLink.plog("xArm: ENABLED (operator), state \(armState)")
         IncidentLog.shared.record(.safety, "Arm enabled")
         return true
     }
@@ -312,6 +319,38 @@ final class XArmLink: ObservableObject {
         let sent = await moveJoints(target)
         await autoRecoverJog()
         return sent
+    }
+
+    /// The arm's state, in words. 1 moving · 2 ready · 3 paused · 4 stopped.
+    var stateText: String {
+        switch armState {
+        case 0: return "unknown"
+        case 1: return "moving"
+        case 2: return "ready"
+        case 3: return "PAUSED"
+        case 4: return "STOPPED"
+        default: return "state \(armState)"
+        }
+    }
+
+    /// Will a move command actually execute right now? Checks what the controller reports, not
+    /// what this app believes.
+    ///
+    /// 🔑 **`motionEnabled` is what WE set; `armState` is what the ARM says.** "Play does nothing"
+    /// is what it looks like when those disagree — the command is accepted with status 0 and then
+    /// the controller declines to execute it because its state is 4. Read the machine.
+    func readiness() async -> String? {
+        guard connected else { return "Not connected" }
+        if simulated { return nil }
+        if let e = await command(FC.getError), e.count >= 1 { errorCode = Int(e[0]) }
+        if errorCode != 0 { return "Fault \(errorCode): \(faultText)" }
+        if let s = await command(FC.getState), s.count >= 1 { armState = Int(s[0]) }
+        switch armState {
+        case 1, 2: return nil
+        case 3: return "Arm is PAUSED — the controller will not run a move"
+        case 4: return "Arm is STOPPED (state 4) — servos may be off. Tap Enable again"
+        default: return "Arm state is \(armState), not ready"
+        }
     }
 
     /// What the arm's error code means, in words. Table ported from PivotBooth's `XArmClient`,

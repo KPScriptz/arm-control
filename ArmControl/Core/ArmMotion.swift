@@ -312,7 +312,19 @@ final class ArmMotionStore: ObservableObject {
         step = 0
         defer { playing = nil; step = 0 }
 
-        GlamaticLink.plog("arm motion “\(motion.name)”: \(motion.poses.count) poses")
+        // 🔑 Ask the CONTROLLER whether it will move before sending anything. "Play does nothing"
+        // is exactly what a stopped or paused arm looks like — the command is accepted with
+        // status 0 and then not executed. Say so up front instead of timing out 20s later.
+        if let why = await arm.readiness() {
+            note = "Won't play: \(why)"
+            GlamaticLink.plog("arm motion refused pre-flight: \(why)")
+            return
+        }
+        if arm.simulated {
+            note = "Playing on the SIMULATED arm — nothing physical moves."
+        }
+
+        GlamaticLink.plog("arm motion “\(motion.name)”: \(motion.poses.count) poses, state \(arm.armState)")
 
         for (i, pose) in motion.poses.enumerated() {
             if Task.isCancelled { note = "Stopped."; return }
@@ -334,12 +346,28 @@ final class ArmMotionStore: ObservableObject {
             }
 
             guard await arm.moveJoints(target, speed: pose.speed, acc: pose.acc) else {
-                note = "The arm refused pose \(i + 1)."
+                note = "The arm REFUSED pose \(i + 1) (command returned an error)."
                 GlamaticLink.plog("arm motion aborted: pose \(i + 1) refused")
                 return
             }
+
+            // Accepted ≠ executing. Give it a beat, then check the arm actually started. If it
+            // did not, say what the controller reports — that is the diagnosis, not "never
+            // reached" twenty seconds later.
+            let before = arm.joints
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            _ = await arm.refreshJoints()
+            let movedAtAll = zip(before, arm.joints).contains { abs($0 - $1) > 0.3 }
+            let alreadyThere = zip(arm.joints, target).allSatisfy { abs($0 - $1) <= 2.5 }
+            if !movedAtAll, !alreadyThere, !arm.simulated {
+                let why = await arm.readiness() ?? "state \(arm.stateText), no fault"
+                note = "Pose \(i + 1): command accepted but the arm did NOT move — \(why)"
+                GlamaticLink.plog("arm motion: accepted but stationary at pose \(i + 1) — \(why)")
+                return
+            }
+
             guard await arm.waitArrival(target) else {
-                note = "Never reached pose \(i + 1)."
+                note = "Started toward pose \(i + 1) but never arrived — now at \(arm.joints.map { Int($0) })."
                 GlamaticLink.plog("arm motion aborted: pose \(i + 1) not reached")
                 return
             }
