@@ -1042,6 +1042,14 @@ final class XArmLink: ObservableObject {
 
     // MARK: Wire
 
+    /// When set, every request and reply is handed over as hex. Used by `ArmDiagnostic` so a
+    /// byte-level transcript of what the arm actually said can be pulled off the iPad.
+    var wireTap: ((String) -> Void)?
+
+    /// Status flags from the most recent reply: 0x40 error, 0x20 warning, 0x10 not ready.
+    private(set) var lastStatusFlags: UInt8 = 0
+    private var lastReportedFlags: UInt8 = 0
+
     /// One request at a time; the reply stream desyncs if two overlap.
     private func command(_ funcode: UInt8, _ params: Data = Data()) async -> Data? {
         guard let conn = connection, connected else { return nil }
@@ -1059,19 +1067,43 @@ final class XArmLink: ObservableObject {
         frame.appendBE16(UInt16(1 + params.count))
         frame.append(funcode)
         frame.append(params)
+        wireTap?("→ fc\(funcode) [\(params.count)B] \(frame.map { String(format: "%02x", $0) }.joined(separator: " "))")
 
         do {
             try await send(conn, frame)
             let header = try await recv(conn, 6)
             let len = Int(header[4]) << 8 | Int(header[5])
             let body = try await recv(conn, len)            // [funcode][status][payload]
+            wireTap?("← fc\(body.first ?? 0) status=\(body.count > 1 ? Int(body[1]) : -1) \(body.map { String(format: "%02x", $0) }.joined(separator: " "))")
             guard body.count >= 2 else { return nil }
-            if body[1] != 0 {
-                GlamaticLink.plog("xArm: cmd \(funcode) returned status \(body[1])")
+            // 🐞 **THE STATUS BYTE IS FLAGS, NOT A PASS/FAIL — and reading it as pass/fail is why
+            // the arm "would not enable" after every restart.** Byte-level diagnosis 2026-09-11:
+            // with the arm in state 4 (stopped) every reply carried status 0x10, the payload was
+            // still valid (`get_state` returned 04 right there in the bytes), and this code threw
+            // all of it away as a refusal. So motion_enable "failed", the joints read as empty,
+            // and enable() gave up — on an arm that was one set_state(0) from ready. The moment
+            // set_state(0) landed, every status went to 0. The arm was fine.
+            //
+            // Per the xArm protocol: 0x40 = an error is latched, 0x20 = a warning is latched,
+            // 0x10 = the arm's state is not ready. Only 0x40 means the command did not take.
+            let flags = body[1]
+            lastStatusFlags = flags
+            if flags & 0x40 != 0 {
+                GlamaticLink.plog("xArm: cmd \(funcode) rejected — error flag (status 0x\(String(flags, radix: 16)))")
                 return nil
+            }
+            if flags & 0x30 != 0 {
+                // Processed, with a caveat. Say so once per flag change rather than on every poll.
+                if flags != lastReportedFlags {
+                    GlamaticLink.plog("xArm: replies carry status 0x\(String(flags, radix: 16)) (\(flags & 0x20 != 0 ? "warning latched" : "")\(flags & 0x10 != 0 ? " not-ready state" : ""))")
+                    lastReportedFlags = flags
+                }
+            } else if lastReportedFlags != 0 {
+                lastReportedFlags = 0
             }
             return body.count > 2 ? body.subdata(in: 2..<body.count) : Data()
         } catch {
+            wireTap?("✗ fc\(funcode) link error: \(error.localizedDescription)")
             // A timed-out command leaves the byte stream misaligned, so drop the link rather than
             // risk pairing the next reply with the wrong request.
             GlamaticLink.plog("xArm: link error — \(error.localizedDescription)")

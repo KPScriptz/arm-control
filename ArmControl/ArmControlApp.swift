@@ -10,6 +10,8 @@ struct ArmControlApp: App {
         WindowGroup {
             RootView()
                 .preferredColorScheme(.dark)
+                // Only does anything when launched with `-armcontrol.diag read|nudge` from devicectl.
+                .task { await ArmDiagnostic.runIfRequested() }
         }
         .onChange(of: scenePhase) { _, phase in
             // Nothing is watching the rail when this app is not on screen. Drop the gate.
