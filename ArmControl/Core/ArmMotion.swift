@@ -326,7 +326,10 @@ final class ArmMotionStore: ObservableObject {
         }
         // Assert position mode + ready before the first command, exactly as the factory program
         // does. A flag cannot tell us the mode; only sending it can.
-        await arm.prepareForMotion()
+        guard await arm.prepareForMotion() else {
+            note = "Won't play: \(arm.preambleProblem ?? "the arm refused the mode/state preamble")"
+            return
+        }
 
         GlamaticLink.plog("arm motion “\(motion.name)”: \(motion.poses.count) poses, state \(arm.armState)")
 

@@ -156,11 +156,18 @@ final class SafetyKernel: ObservableObject {
         // enabled arm with a movement running is the more dangerous of the two to leave unattended,
         // and it would have sailed straight past a single `guard armed`.
         let armLive = XArmLink.shared.motionEnabled || ArmMotionStore.shared.isPlaying
-        guard armed || armLive else { return }
+        let armLinked = XArmLink.shared.connected && !XArmLink.shared.simulated
+        guard armed || armLive || armLinked else { return }
         Task {
             MotionStore.shared.stop()
             ArmMotionStore.shared.stop()
             if armLive { await XArmLink.shared.disable() }
+            // 🔑 **Let go of the arm's control slot, cleanly.** The xArm allows ONE control-port
+            // client and holds a dead session for 30–60s. An app that backgrounds or is killed
+            // without closing leaves its ghost in that slot, and the next launch connects as a
+            // SECOND client — whose commands are acknowledged and silently ignored. That is
+            // "accepted, queue 0, no motion". Close the socket on the way out so the slot is free.
+            if armLinked { XArmLink.shared.disconnect() }
             if armed { await disarm(reason: "App left the foreground") }
         }
     }

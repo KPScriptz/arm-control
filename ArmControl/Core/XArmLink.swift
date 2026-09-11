@@ -365,15 +365,29 @@ final class XArmLink: ObservableObject {
     /// position command returns status 0 and is silently dropped. The mode is not readable over
     /// this port, so it cannot be checked; it can only be asserted. Idempotent and cheap, so do it
     /// before every motion sequence rather than trusting a flag.
-    func prepareForMotion() async {
-        guard connected, !simulated else { return }
-        _ = await command(FC.motionEnable, Data([8, 1]))
-        _ = await command(FC.setMode, Data([0]))
-        _ = await command(FC.setState, Data([0]))
+    /// Non-nil when the preamble was refused — which is what a second client sees when another
+    /// connection owns the arm's single control slot.
+    @Published private(set) var preambleProblem: String?
+
+    @discardableResult
+    func prepareForMotion() async -> Bool {
+        guard connected, !simulated else { return true }
+        var refused: [String] = []
+        if await command(FC.motionEnable, Data([8, 1])) == nil { refused.append("motion_enable") }
+        if await command(FC.setMode, Data([0])) == nil { refused.append("set_mode(0)") }
+        if await command(FC.setState, Data([0])) == nil { refused.append("set_state(0)") }
         // The factory program sleeps a full second here. Half is enough to let the state settle
         // before the first move lands.
         try? await Task.sleep(nanoseconds: 500_000_000)
         handGuiding = false
+        if refused.isEmpty {
+            preambleProblem = nil
+            return true
+        }
+        preambleProblem = "Arm refused \(refused.joined(separator: ", ")) — another client may own the control port. Power-cycle the arm."
+        status = preambleProblem!
+        GlamaticLink.plog("xArm: preamble REFUSED: \(refused)")
+        return false
     }
 
     /// Commands sitting in the controller's queue. 0 after an accepted move means it was consumed
