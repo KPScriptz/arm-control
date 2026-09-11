@@ -242,152 +242,159 @@ struct JointStudioView: View {
                 .tint(Pivot.danger)
             }
 
-            // ⚠️ Never a disabled control without its reason beside it — a silent grey button is
-            // what makes someone tap it eleven times.
-            if !arm.connected {
-                Text("Not connected. The arm is on the wired LAN at \(XArmLink.host) — the iPad needs its Ethernet adapter and a 192.168.1.x address.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else if arm.errorCode != 0 {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label(arm.faultText, systemImage: "exclamationmark.triangle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Pivot.danger)
-                    if arm.faultNeedsHardware {
-                        // Do not offer a software fix for a physical cause — that just teaches
-                        // someone to tap a button eleven times instead of walking to the machine.
-                        Text("This one has a physical cause. Release the e-stop or check the joint, then clear it.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    // 🔑 **Collision first, because the right recovery is the opposite one.** Walking
-                    // to neutral from a collided pose can drive the arm further into what it hit;
-                    // the path it just came along is the only one known to be clear.
-                    if arm.errorCode == 22 {
-                        Text("Self-collision. Backing out the way it came is safer than heading for neutral — a path to neutral can push it further into whatever it hit.")
-                            .font(.caption).foregroundStyle(Pivot.caution)
-                    }
-
-                    Button {
-                        Task { await arm.backOut() }
-                    } label: {
-                        Label("Back out the way it came", systemImage: "arrow.uturn.backward")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(arm.errorCode == 22 ? Pivot.caution : Pivot.blue)
-                    .disabled(!arm.hasBackOutPath)
-
-                    if !arm.hasBackOutPath {
-                        Text("No recent path recorded — this only works if the arm moved under the app's control just before it stuck.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-
-                    // The answer to "it won't fix the part that collided": stop trying to be clever
-                    // and hand control back to the person who can see the arm.
-                    Button {
-                        Task { await arm.clearAndEnableForJogging() }
-                    } label: {
-                        Label("Clear it and let me jog it myself", systemImage: "hand.point.up.left")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-
-                    // 🔑 The last resort, and for an arm folded onto itself the FIRST thing that
-                    // actually works. Software cannot plan out of a pose the controller calls
-                    // invalid; hands can.
-                    Button {
-                        confirmHandGuide = true
-                    } label: {
-                        Label("Release the joints — move it by hand", systemImage: "hand.raised.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(Pivot.danger)
-
-                    Text("Clears the fault and leaves the arm live, so you can jog the exact joint that hit something using the controls below.")
-                        .font(.caption).foregroundStyle(.secondary)
-
-                    Button {
-                        confirmNeutral = true
-                    } label: {
-                        Label("Walk it to neutral", systemImage: "figure.walk")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button {
-                        Task { await arm.recoverFromFault() }
-                    } label: {
-                        Label("Just clear the fault", systemImage: "arrow.counterclockwise")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                }
-            } else if !arm.motionEnabled {
-                Text("Connected but not energised. Enable puts the servos under power — it moves nothing on its own.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            if arm.connected, arm.errorCode != 0 {
+                faultCard
             }
 
-            HStack(spacing: 10) {
+            // 🔑 **ONE BUTTON.** "Connect" then "Enable" is two states an operator never needs to
+            // tell apart; what they want is the arm ready. Connect-and-enable in one tap, and the
+            // button's label says what it will do next.
+            if !arm.connected {
                 Button {
-                    Task { await arm.connect() }
+                    Task {
+                        if await arm.connect() { await arm.enable() }
+                    }
                 } label: {
-                    Label(arm.connected ? "Reconnect" : "Connect", systemImage: "cable.connector")
+                    Label("Connect the arm", systemImage: "bolt.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
-
-                if arm.motionEnabled {
+                .buttonStyle(.borderedProminent)
+                Text("Wired LAN at \(XArmLink.host). The iPad needs its Ethernet adapter and a 192.168.1.x address.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if !arm.motionEnabled, arm.errorCode == 0 {
+                Button {
+                    Task { await arm.enable() }
+                } label: {
+                    Label("Enable the arm", systemImage: "bolt.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            } else if arm.motionEnabled {
+                HStack(spacing: 12) {
+                    // The one genuinely loud thing on the screen. An energised five-joint arm that
+                    // looks identical to an idle one is the state you do not want to misread.
+                    Label(arm.simulated ? "SIMULATED" : "LIVE — the arm will move",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(arm.simulated ? Pivot.purple : Pivot.caution)
+                    Spacer()
                     Button {
                         Task { await arm.disable() }
                     } label: {
                         DestructiveLabel("Disable", systemImage: "bolt.slash.fill")
-                            .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
-                } else {
-                    Button {
-                        Task { await arm.enable() }
-                    } label: {
-                        Label("Enable", systemImage: "bolt.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!arm.connected)
                 }
             }
 
-            if arm.motionEnabled {
-                // The one genuinely loud thing on the screen. An energised five-joint arm that
-                // looks identical to an idle one is the state you do not want to misread.
-                Label(arm.simulated ? "SIMULATED — no arm is moving" : "LIVE — the arm will move",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(arm.simulated ? Pivot.purple : Pivot.caution)
-
-                // Start every session from a known place rather than from wherever it was left.
-                HStack(spacing: 10) {
-                    Button {
-                        confirmNeutral = true
-                    } label: {
-                        Label("Go to neutral", systemImage: "figure.stand")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button {
-                        arm.neutralPose = Array(arm.joints.prefix(XArmLink.jointCount))
-                    } label: {
-                        Label("Set as neutral", systemImage: "pin")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(arm.joints.isEmpty)
-                }
-                Text("Neutral: \(arm.neutralLabel)")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            if showAdvanced {
+                Divider()
+                advancedArmControls
             }
+        }
+        .padding()
+        .pivotGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    /// Recovery, trimmed to the three that matter for the fault in front of you.
+    ///
+    /// 🔑 Five buttons on a faulted arm was its own kind of stuck. The primary is chosen by the
+    /// fault: a collision backs out the way it came, an over-limit joint walks to neutral, anything
+    /// else just clears. The other two are always the same — let me jog it, or let me move it by
+    /// hand — because those are the ones that work when the clever one does not.
+    private var faultCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(arm.faultText, systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Pivot.danger)
+
+            if arm.faultNeedsHardware {
+                Text("Physical cause. Release the e-stop or check the joint on the machine, then clear.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            if arm.errorCode == 22, arm.hasBackOutPath {
+                Button {
+                    Task { await arm.backOut() }
+                } label: {
+                    Label("Back out the way it came", systemImage: "arrow.uturn.backward")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Pivot.caution)
+            } else if arm.errorCode == 23 {
+                Button {
+                    confirmNeutral = true
+                } label: {
+                    Label("Walk it back to neutral", systemImage: "figure.walk")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Pivot.caution)
+            } else {
+                Button {
+                    Task { await arm.recoverFromFault() }
+                } label: {
+                    Label("Clear the fault", systemImage: "arrow.counterclockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Pivot.caution)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    Task { await arm.clearAndEnableForJogging() }
+                } label: {
+                    Label("Let me jog it", systemImage: "hand.point.up.left")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    confirmHandGuide = true
+                } label: {
+                    Label("Move it by hand", systemImage: "hand.raised.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(Pivot.danger)
+            }
+        }
+        .padding(12)
+        .background(Pivot.danger.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// Neutral, reconnect, hand-guiding and the simulator — needed sometimes, in the way always.
+    private var advancedArmControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Button {
+                    Task { await arm.connect() }
+                } label: {
+                    Label("Reconnect", systemImage: "cable.connector").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    confirmNeutral = true
+                } label: {
+                    Label("Go to neutral", systemImage: "figure.stand").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!arm.motionEnabled)
+
+                Button {
+                    arm.neutralPose = Array(arm.joints.prefix(XArmLink.jointCount))
+                } label: {
+                    Label("Set neutral", systemImage: "pin").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(arm.joints.isEmpty)
+            }
+            Text("Neutral: \(arm.neutralLabel)")
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
 
             // Reachable without a fault code too — an arm can be physically stuck while the
             // controller reports nothing wrong at all.
@@ -402,21 +409,14 @@ struct JointStudioView: View {
                 .foregroundStyle(Pivot.danger)
             }
 
-            Divider()
-
-            // 🔑 Authoring needs to happen the night before, on a sofa, with no arm and no adapter.
-            // Kept here rather than buried in Engineer settings because this is the screen where
-            // the distinction between a real arm and a pretend one matters most.
             Toggle(isOn: $arm.simulated) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Simulated arm").font(.subheadline)
-                    Text("Build movements with no hardware connected. Poses save and play exactly the same on the real arm.")
+                    Text("Build movements with no hardware. Poses play the same on the real arm.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
-        .padding()
-        .pivotGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     // MARK: The joints
