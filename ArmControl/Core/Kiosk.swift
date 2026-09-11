@@ -31,8 +31,10 @@ final class Kiosk: ObservableObject {
     /// in exactly once, on an iPad that has never been unlocked, and never again afterwards.
     @Published private(set) var hasEverUnlocked: Bool
 
-    /// 0485 is the booth PIN carried over from PivotBooth, so the crew has one number to remember.
-    static let defaultPIN = "0485"
+    /// ⚠️ A placeholder, not a booth PIN. This repo is public, so the real number must never be in
+    /// source — set it once on the iPad under Setup → Booth flow → PIN. (Until 2026-09-11 this
+    /// shipped as the crew's shared PIN; that number is in git history and should be retired.)
+    static let defaultPIN = "0000"
 
     @Published private(set) var locked: Bool
 

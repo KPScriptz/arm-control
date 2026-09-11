@@ -229,7 +229,7 @@ struct SetupView: View {
             Button("Lock to booth", role: .destructive) { kiosk.lock() }
             Button("Stay in settings", role: .cancel) {}
         } message: {
-            Text("To get back into settings: tap the top-left corner three times, then enter \(kiosk.pin == Kiosk.defaultPIN ? "0485" : "your PIN").")
+            Text("To get back into settings: tap the top-left corner three times, then enter your PIN\(kiosk.pin == Kiosk.defaultPIN ? " — still the placeholder 0000, change it below" : "").")
         }
     }
 
@@ -433,7 +433,7 @@ struct AttendantSettings: View {
             Section {
                 LabeledContent("PIN") {
                     HStack {
-                        TextField(kiosk.pin == Kiosk.defaultPIN ? "0485" : "••••", text: $newPIN)
+                        TextField("New PIN", text: $newPIN)
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 110)
@@ -449,7 +449,7 @@ struct AttendantSettings: View {
             } footer: {
                 Text(pinSaved
                      ? "PIN updated."
-                     : "Currently \(kiosk.pin == Kiosk.defaultPIN ? "0485, the same as PivotBooth" : "custom"). Four digits or more.")
+                     : "Currently \(kiosk.pin == Kiosk.defaultPIN ? "the placeholder 0000 — set a real one" : "custom"). Four digits or more.")
                     .foregroundStyle(pinSaved ? Theme.good : Theme.secondary)
             }
 
@@ -475,7 +475,7 @@ struct AttendantSettings: View {
             Button("Lock", role: .destructive) { kiosk.lock() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("To get back out: tap the top-left corner three times, then enter \(kiosk.pin == Kiosk.defaultPIN ? "0485" : "your PIN").")
+            Text("To get back out: tap the top-left corner three times, then enter your PIN\(kiosk.pin == Kiosk.defaultPIN ? " — still the placeholder 0000, change it below" : "").")
         }
     }
 }
