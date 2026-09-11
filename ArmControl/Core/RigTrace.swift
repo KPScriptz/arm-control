@@ -152,7 +152,9 @@ final class RigRecorder: ObservableObject {
             // Sleep to a FIXED GRID rather than sleeping the interval. Each rail read is an HTTPS
             // round trip; at 100ms a read, forty interval-sleeps land four seconds late and every
             // recorded time is stretched with them.
-            let interval = 0.25
+            // 4 Hz is the ceiling the rail's web server tolerates. Arm-only over Modbus is cheap,
+            // and a hand-guided move deserves the finer grain: 10 Hz.
+            let interval = await self.includeRail ? 0.25 : 0.10
             var tick = 0
             while !Task.isCancelled {
                 let now = Date().timeIntervalSince(began)

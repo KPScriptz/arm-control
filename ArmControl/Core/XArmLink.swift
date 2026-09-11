@@ -48,7 +48,50 @@ final class XArmLink: ObservableObject {
         static let setMode:      UInt8 = 19
         static let moveJoint:    UInt8 = 23
         static let getJointPos:  UInt8 = 42
+        /// Controller digital inputs, one u16. Verified against the installed SDK source
+        /// (`x_config.py: CGPIO_GET_DIGIT = 131`; `cgpio_get_auxdigit` reads one u16).
+        static let cgpioGetDigit: UInt8 = 131
+        /// Payload for gravity compensation: 4 LE floats — mass kg, then centre-of-mass x y z mm.
+        /// Verified against the SDK (`SET_LOAD_PARAM = 36`, `set_tcp_load` → `set_nfp32(…, 4)`).
+        static let setLoadParam: UInt8 = 36
     }
+
+    /// The camera rig's payload, exactly as the factory program declares it before anything else:
+    /// `set_tcp_load(1.46, [23.84, 15.44, 26.31])`.
+    ///
+    /// 🔑 **Without this, hand-guiding fights you.** In teach mode the arm holds itself up by
+    /// compensating for the load it THINKS it carries. Tell it the wrong weight and it sags or
+    /// drifts under your hands; tell it the right one and it floats where you leave it.
+    static let factoryPayloadKg: Float = 1.46
+    static let factoryPayloadCoM: [Float] = [23.84, 15.44, 26.31]
+
+    @discardableResult
+    func setPayload(kg: Float = factoryPayloadKg, com: [Float] = factoryPayloadCoM) async -> Bool {
+        guard connected, !simulated else { return true }
+        var p = Data()
+        p.appendLE32(kg)
+        for v in com.prefix(3) { p.appendLE32(v) }
+        let ok = await command(FC.setLoadParam, p) != nil
+        GlamaticLink.plog("xArm: payload \(kg) kg @ \(com) → \(ok ? "set" : "REFUSED")")
+        return ok
+    }
+
+    /// The controller's digital inputs as a bit field, or nil if unreadable.
+    ///
+    /// 🔑 **This is how the PLC tells the arm which program to run.** The Blockly program on the
+    /// controller reads `get_cgpio_digital(1…6)` and branches on the pattern; the SDK maps
+    /// `get_cgpio_digital(n)` to bit n of this word. So the branch number the arm will run is
+    /// `(word >> 1) & 0x3F`. Reading it while the PLC asserts a program is the only way to learn
+    /// which arm branch the PLC's numbering maps to — the two numberings need not agree.
+    func readInputs() async -> UInt16? {
+        guard connected, !simulated else { return nil }
+        guard let d = await command(FC.cgpioGetDigit), d.count >= 2 else { return nil }
+        // The SDK's bytes_to_u16 is big-endian for these registers.
+        return UInt16(d[0]) << 8 | UInt16(d[1])
+    }
+
+    /// The Blockly branch number encoded on the input pins.
+    static func branch(fromInputs w: UInt16) -> Int { Int((w >> 1) & 0x3F) }
 
     /// How many joints this arm has. An xArm **5** — J1…J5.
     static let jointCount = 5
@@ -404,10 +447,13 @@ final class XArmLink: ObservableObject {
     /// 🔑 **`motionEnabled` is what WE set; `armState` is what the ARM says.** "Play does nothing"
     /// is what it looks like when those disagree — the command is accepted with status 0 and then
     /// the controller declines to execute it because its state is 4. Read the machine.
+    /// The arm's warning code, alongside the error. Warnings do not stop motion but explain it.
+    @Published private(set) var warnCode = 0
+
     func readiness() async -> String? {
         guard connected else { return "Not connected" }
         if simulated { return nil }
-        if let e = await command(FC.getError), e.count >= 1 { errorCode = Int(e[0]) }
+        if let e = await command(FC.getError), e.count >= 2 { errorCode = Int(e[0]); warnCode = Int(e[1]) }
         if errorCode != 0 { return "Fault \(errorCode): \(faultText)" }
         if let s = await command(FC.getState), s.count >= 1 { armState = Int(s[0]) }
         switch armState {
@@ -718,6 +764,8 @@ final class XArmLink: ObservableObject {
         // Clear first: the controller will not change mode while a fault is latched.
         _ = await command(FC.cleanWar)
         _ = await command(FC.cleanErr)
+        // Gravity compensation needs the real payload or the arm drifts in your hands.
+        await setPayload()
 
         guard await command(FC.motionEnable, Data([8, 1])) != nil,
               await command(FC.setMode, Data([2])) != nil,      // 2 = joint teaching
