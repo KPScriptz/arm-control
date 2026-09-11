@@ -260,6 +260,7 @@ final class ArmMotionStore: ObservableObject {
     @discardableResult
     func preview(_ pose: ArmPose) async -> Bool {
         guard arm.motionEnabled else { return false }
+        await arm.prepareForMotion()
         let target = pose.normalised
         guard await arm.moveJoints(target, speed: pose.speed, acc: pose.acc) else { return false }
         return await arm.waitArrival(target)
@@ -323,6 +324,9 @@ final class ArmMotionStore: ObservableObject {
         if arm.simulated {
             note = "Playing on the SIMULATED arm — nothing physical moves."
         }
+        // Assert position mode + ready before the first command, exactly as the factory program
+        // does. A flag cannot tell us the mode; only sending it can.
+        await arm.prepareForMotion()
 
         GlamaticLink.plog("arm motion “\(motion.name)”: \(motion.poses.count) poses, state \(arm.armState)")
 
@@ -361,8 +365,12 @@ final class ArmMotionStore: ObservableObject {
             let alreadyThere = zip(arm.joints, target).allSatisfy { abs($0 - $1) <= 2.5 }
             if !movedAtAll, !alreadyThere, !arm.simulated {
                 let why = await arm.readiness() ?? "state \(arm.stateText), no fault"
-                note = "Pose \(i + 1): command accepted but the arm did NOT move — \(why)"
-                GlamaticLink.plog("arm motion: accepted but stationary at pose \(i + 1) — \(why)")
+                let q = await arm.queuedCommands().map { "queue \($0)" } ?? "queue unknown"
+                // The queue count is the tell: 0 = the controller consumed the command and did
+                // nothing with it (mode is wrong, or servos are not really holding); >0 and
+                // stuck = something else owns the arm and ours is waiting behind it.
+                note = "Pose \(i + 1): command accepted but the arm did NOT move — \(why) · \(q) · at \(arm.joints.map { Int($0) })"
+                GlamaticLink.plog("arm motion: accepted but stationary at pose \(i + 1) — \(why), \(q)")
                 return
             }
 

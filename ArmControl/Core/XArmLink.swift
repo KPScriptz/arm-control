@@ -39,6 +39,9 @@ final class XArmLink: ObservableObject {
         static let motionEnable: UInt8 = 11
         static let setState:     UInt8 = 12
         static let getState:     UInt8 = 13
+        /// Commands waiting in the controller's motion queue. Every other code in this table
+        /// matches the public xArm register map exactly, so 14 = GET_CMDNUM is taken from it.
+        static let getCmdNum:    UInt8 = 14
         static let getError:     UInt8 = 15
         static let cleanErr:     UInt8 = 16
         static let cleanWar:     UInt8 = 17
@@ -248,6 +251,7 @@ final class XArmLink: ObservableObject {
             return false
         }
         motionEnabled = true
+        modeAsserted = false
         // 🔑 Do not report "live" on our own say-so. Read back what the controller thinks.
         try? await Task.sleep(nanoseconds: 300_000_000)
         if let why = await readiness() {
@@ -264,6 +268,7 @@ final class XArmLink: ObservableObject {
     /// Drop the servos. Safe at any time.
     func disable() async {
         motionEnabled = false
+        modeAsserted = false
         if simulated { sim.disable() }
         else if connected { _ = await command(FC.setState, Data([4])) }
         status = connected ? "Arm idle" : status
@@ -275,6 +280,7 @@ final class XArmLink: ObservableObject {
     func eStop() async {
         eStopActive = true
         motionEnabled = false
+        modeAsserted = false
         if simulated { sim.eStop() }
         else { _ = await command(FC.setState, Data([4])) }
         GlamaticLink.plog("xArm: E-STOP")
@@ -316,10 +322,27 @@ final class XArmLink: ObservableObject {
         while target.count < Self.jointCount { target.append(0) }
         guard index < target.count else { return false }
         target[index] += deltaDeg
+        // Assert the mode on the first jog after enabling; afterwards it is already right.
+        if !modeAsserted { await prepareForMotion(); modeAsserted = true }
+        let before = joints
         let sent = await moveJoints(target)
         await autoRecoverJog()
+        // A jog is the smallest possible test of "does the arm move". Report the verdict.
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        _ = await refreshJoints()
+        if sent, !simulated {
+            let moved = zip(before, joints).contains { abs($0 - $1) > 0.3 }
+            if !moved {
+                let q = await queuedCommands().map { "queue \($0)" } ?? "queue ?"
+                status = "Jog accepted but J\(index + 1) did not move — \(stateText), \(q)"
+                GlamaticLink.plog("xArm: jog accepted, no motion — state \(armState), \(q)")
+            }
+        }
         return sent
     }
+
+    /// Whether `prepareForMotion` has run since the last enable. Reset on enable/disable/eStop.
+    private var modeAsserted = false
 
     /// The arm's state, in words. 1 moving · 2 ready · 3 paused · 4 stopped.
     var stateText: String {
@@ -331,6 +354,34 @@ final class XArmLink: ObservableObject {
         case 4: return "STOPPED"
         default: return "state \(armState)"
         }
+    }
+
+    /// Put the controller into position mode and ready state, the way the factory's own program
+    /// does before every run: `motion_enable(True); set_mode(0); set_state(0); sleep(1)`.
+    ///
+    /// 🔑 **"Command accepted, state ready, no fault, no motion" is what mode 2 looks like.**
+    /// Hand-guiding puts the arm in teach mode. If the app relaunches before the joints are locked
+    /// again, `handGuiding` resets to false while the ARM stays in mode 2 — and in mode 2 a
+    /// position command returns status 0 and is silently dropped. The mode is not readable over
+    /// this port, so it cannot be checked; it can only be asserted. Idempotent and cheap, so do it
+    /// before every motion sequence rather than trusting a flag.
+    func prepareForMotion() async {
+        guard connected, !simulated else { return }
+        _ = await command(FC.motionEnable, Data([8, 1]))
+        _ = await command(FC.setMode, Data([0]))
+        _ = await command(FC.setState, Data([0]))
+        // The factory program sleeps a full second here. Half is enough to let the state settle
+        // before the first move lands.
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        handGuiding = false
+    }
+
+    /// Commands sitting in the controller's queue. 0 after an accepted move means it was consumed
+    /// — executed or dropped. Nonzero and rising means it is queued behind something.
+    func queuedCommands() async -> Int? {
+        guard connected, !simulated else { return nil }
+        guard let d = await command(FC.getCmdNum), d.count >= 2 else { return nil }
+        return Int(d[0]) | (Int(d[1]) << 8)
     }
 
     /// Will a move command actually execute right now? Checks what the controller reports, not
